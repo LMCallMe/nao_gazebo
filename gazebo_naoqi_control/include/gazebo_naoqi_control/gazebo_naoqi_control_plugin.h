@@ -65,7 +65,7 @@ namespace gazebo
       void readSim();
       void writeSim(ros::Time time, ros::Duration period);
 
-      void initSensors();
+      void initSensors(physics::BasePtr _base);
 
       void onCameraUpdate(const Sim::CameraSensor* _camera, const unsigned char *_image, unsigned int _width, unsigned int _height, unsigned int _depth, const std::string &_format);
 

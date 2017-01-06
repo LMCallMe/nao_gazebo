@@ -143,6 +143,7 @@ void GazeboNaoqiControlPlugin::Load(physics::ModelPtr _parent, sdf::ElementPtr _
   }
 
   // Check for port element
+  
   if(_sdf->HasElement("port"))
   {
     naoqi_port_ = _sdf->GetElement("port")->Get<int>();
@@ -152,7 +153,9 @@ void GazeboNaoqiControlPlugin::Load(physics::ModelPtr _parent, sdf::ElementPtr _
     naoqi_port_ = 9559;
     ROS_WARN("No port element present. Using default: [%d]", naoqi_port_);
   }
-
+  ROS_INFO("Connecting to port [%d]",naoqi_port_);
+  //ROS_INFO(_sdf->GetElement("port")->Get<std::string>().c_str());
+  
   // Check for modelType element
   naoqi_model_type_ = "NAOH25V40";
   if(_sdf->HasElement("modelType"))
@@ -222,7 +225,8 @@ void GazeboNaoqiControlPlugin::Load(physics::ModelPtr _parent, sdf::ElementPtr _
   }
 
   // Initialize Sensors
-  initSensors();
+  ROS_INFO("Initialize Sensors");
+  initSensors(model_);
 
 
   // Listen to the update event. This event is broadcast every
@@ -233,131 +237,147 @@ void GazeboNaoqiControlPlugin::Load(physics::ModelPtr _parent, sdf::ElementPtr _
   ROS_INFO("GazeboNaoqiControlPlugin loaded successfully!");
 }
 
-void GazeboNaoqiControlPlugin::initSensors()
+void GazeboNaoqiControlPlugin::initSensors(physics::BasePtr _base)
 {
-  // Activate Camera Sensors
-  std::vector<const Sim::CameraSensor*> camera_sensors = naoqi_model_->cameraSensors();
-  for(int i=0;i<camera_sensors.size();i++)
+  physics::BasePtr _child;
+  std::string scoped_name;
+  // use Scoped Name to find Sensors so you can run more naosims
+  for(int i=0; i < _base->GetChildCount();i++)
   {
-    sensors::CameraSensorPtr cam = (boost::dynamic_pointer_cast<sensors::CameraSensor>(sensors::SensorManager::Instance()->GetSensor(camera_sensors[i]->name())));
-
-    if(cam)
+    _child = _base->GetChild(i);
+    scoped_name = world_->GetName()+"::" + _child->GetScopedName() + "::";
+    // Activate Camera Sensors
+    std::vector<const Sim::CameraSensor*> camera_sensors = naoqi_model_->cameraSensors();
+    for(int i=0;i<camera_sensors.size();i++)
     {
-      // Subscribe to camera updates
-      if(camera_sensors[i]->name() == "CameraTop")
+      sensors::CameraSensorPtr cam = (boost::dynamic_pointer_cast<sensors::CameraSensor>(sensors::SensorManager::Instance()->GetSensor(scoped_name+camera_sensors[i]->name())));
+
+      if(cam)
       {
-        top_camera_ = camera_sensors[i];
-        gazebo_top_camera_ = cam;
-        new_top_camera_frame_connection_ = cam->GetCamera()->ConnectNewImageFrame(boost::bind(&GazeboNaoqiControlPlugin::onCameraUpdate, this, top_camera_, _1, _2, _3, _4, _5));
+        ROS_INFO(cam->GetScopedName().c_str());
+        // Subscribe to camera updates
+        if(camera_sensors[i]->name() == "CameraTop")
+        {
+          top_camera_ = camera_sensors[i];
+          gazebo_top_camera_ = cam;
+          new_top_camera_frame_connection_ = cam->GetCamera()->ConnectNewImageFrame(boost::bind(&GazeboNaoqiControlPlugin::onCameraUpdate, this, top_camera_, _1, _2, _3, _4, _5));
+        }
+        else if(camera_sensors[i]->name() == "CameraBottom")
+        {
+          bottom_camera_ = camera_sensors[i];
+          gazebo_bottom_camera_ = cam;
+          new_bottom_camera_frame_connection_ = cam->GetCamera()->ConnectNewImageFrame(boost::bind(&GazeboNaoqiControlPlugin::onCameraUpdate, this, bottom_camera_, _1, _2, _3, _4, _5));
+        }
+        else
+          continue;
+        cam->SetActive(true);
       }
-      else if(camera_sensors[i]->name() == "CameraBottom")
-      {
-        bottom_camera_ = camera_sensors[i];
-        gazebo_bottom_camera_ = cam;
-        new_bottom_camera_frame_connection_ = cam->GetCamera()->ConnectNewImageFrame(boost::bind(&GazeboNaoqiControlPlugin::onCameraUpdate, this, bottom_camera_, _1, _2, _3, _4, _5));
-      }
-      else
-        continue;
-      cam->SetActive(true);
     }
-  }
 
-  // Activate IMU - I assume only 1 IMU (TO-DO: Check cases where more exist)
-  std::vector<const Sim::InertialSensor*> inertial_sensors = naoqi_model_->inertialSensors();
-  if(inertial_sensors.size()>=1)
-  {
-    sensors::ImuSensorPtr imu = (boost::dynamic_pointer_cast<sensors::ImuSensor>(sensors::SensorManager::Instance()->GetSensor("imu")));
-
-    if(imu)
+    // Activate IMU - I assume only 1 IMU (TO-DO: Check cases where more exist)
+    std::vector<const Sim::InertialSensor*> inertial_sensors = naoqi_model_->inertialSensors();
+    if(inertial_sensors.size()>=1)
     {
-      imu_update_connection_ = imu->ConnectUpdated(boost::bind(&GazeboNaoqiControlPlugin::onImuUpdate, this, imu));
-      gazebo_imu_ = imu;
-      inertial_sensor_ = inertial_sensors[0];
-      imu->SetActive(true);
+      sensors::ImuSensorPtr imu = (boost::dynamic_pointer_cast<sensors::ImuSensor>(sensors::SensorManager::Instance()->GetSensor(scoped_name + "imu")));
+
+      if(imu)
+      {
+        ROS_INFO(imu->GetScopedName().c_str());
+        imu_update_connection_ = imu->ConnectUpdated(boost::bind(&GazeboNaoqiControlPlugin::onImuUpdate, this, imu));
+        gazebo_imu_ = imu;
+        inertial_sensor_ = inertial_sensors[0];
+        imu->SetActive(true);
+      }
     }
-  }
 
-  // Activate FSRs
-  std::vector<const Sim::FSRSensor*> fsr_sensors = naoqi_model_->fsrSensors();
-  for(int i=0;i<fsr_sensors.size();i++)
-  {
-    sensors::ContactSensorPtr fsr = (boost::dynamic_pointer_cast<sensors::ContactSensor>(sensors::SensorManager::Instance()->GetSensor(fsr_sensors[i]->name())));
-
-    if(fsr)
+    // Activate FSRs
+    std::vector<const Sim::FSRSensor*> fsr_sensors = naoqi_model_->fsrSensors();
+    for(int i=0;i<fsr_sensors.size();i++)
     {
-      std::string name = fsr_sensors[i]->name();
-      if(name == "RFoot/FSR/RearLeft")
+      sensors::ContactSensorPtr fsr = (boost::dynamic_pointer_cast<sensors::ContactSensor>(sensors::SensorManager::Instance()->GetSensor(scoped_name + fsr_sensors[i]->name())));
+
+      if(fsr)
       {
-        gazebo_rfoot_rear_left_ = fsr;
-        RFoot_rear_left_ = fsr_sensors[i];
-        fsr_rrl_update_connection_ = fsr->ConnectUpdated(boost::bind(&GazeboNaoqiControlPlugin::onFSRUpdate, this, gazebo_rfoot_rear_left_, RFoot_rear_left_));
+        ROS_INFO(fsr->GetScopedName().c_str());
+        std::string name = fsr_sensors[i]->name();
+        if(name == "RFoot/FSR/RearLeft")
+        {
+          gazebo_rfoot_rear_left_ = fsr;
+          RFoot_rear_left_ = fsr_sensors[i];
+          fsr_rrl_update_connection_ = fsr->ConnectUpdated(boost::bind(&GazeboNaoqiControlPlugin::onFSRUpdate, this, gazebo_rfoot_rear_left_, RFoot_rear_left_));
+        }
+        else if(name == "RFoot/FSR/RearRight")
+        {
+          gazebo_rfoot_rear_right_ = fsr;
+          RFoot_rear_right_ = fsr_sensors[i];
+          fsr_rrr_update_connection_ = fsr->ConnectUpdated(boost::bind(&GazeboNaoqiControlPlugin::onFSRUpdate, this, gazebo_rfoot_rear_right_, RFoot_rear_right_));
+        }
+        else if(name == "RFoot/FSR/FrontLeft")
+        {
+          gazebo_rfoot_front_left_ = fsr;
+          RFoot_front_left_ = fsr_sensors[i];
+          fsr_rfl_update_connection_ = fsr->ConnectUpdated(boost::bind(&GazeboNaoqiControlPlugin::onFSRUpdate, this, gazebo_rfoot_front_left_, RFoot_front_left_));
+        }
+        else if(name == "RFoot/FSR/FrontRight")
+        {
+          gazebo_rfoot_front_right_ = fsr;
+          RFoot_front_right_ = fsr_sensors[i];
+          fsr_rfr_update_connection_ = fsr->ConnectUpdated(boost::bind(&GazeboNaoqiControlPlugin::onFSRUpdate, this, gazebo_rfoot_front_right_, RFoot_front_right_));
+        }
+        else if(name == "LFoot/FSR/RearLeft")
+        {
+          gazebo_lfoot_rear_left_ = fsr;
+          LFoot_rear_left_ = fsr_sensors[i];
+          fsr_lrl_update_connection_ = fsr->ConnectUpdated(boost::bind(&GazeboNaoqiControlPlugin::onFSRUpdate, this, gazebo_lfoot_rear_left_, LFoot_rear_left_));
+        }
+        else if(name == "LFoot/FSR/RearRight")
+        {
+          gazebo_lfoot_rear_right_ = fsr;
+          LFoot_rear_right_ = fsr_sensors[i];
+          fsr_lrr_update_connection_ = fsr->ConnectUpdated(boost::bind(&GazeboNaoqiControlPlugin::onFSRUpdate, this, gazebo_lfoot_rear_right_, LFoot_rear_right_));
+        }
+        else if(name == "LFoot/FSR/FrontLeft")
+        {
+          gazebo_lfoot_front_left_ = fsr;
+          LFoot_front_left_ = fsr_sensors[i];
+          fsr_lfl_update_connection_ = fsr->ConnectUpdated(boost::bind(&GazeboNaoqiControlPlugin::onFSRUpdate, this, gazebo_lfoot_front_left_, LFoot_front_left_));
+        }
+        else if(name == "LFoot/FSR/FrontRight")
+        {
+          gazebo_lfoot_front_right_ = fsr;
+          LFoot_front_right_ = fsr_sensors[i];
+          fsr_lfr_update_connection_ = fsr->ConnectUpdated(boost::bind(&GazeboNaoqiControlPlugin::onFSRUpdate, this, gazebo_lfoot_front_right_, LFoot_front_right_));
+        }
+        fsr->SetActive(true);
       }
-      else if(name == "RFoot/FSR/RearRight")
-      {
-        gazebo_rfoot_rear_right_ = fsr;
-        RFoot_rear_right_ = fsr_sensors[i];
-        fsr_rrr_update_connection_ = fsr->ConnectUpdated(boost::bind(&GazeboNaoqiControlPlugin::onFSRUpdate, this, gazebo_rfoot_rear_right_, RFoot_rear_right_));
-      }
-      else if(name == "RFoot/FSR/FrontLeft")
-      {
-        gazebo_rfoot_front_left_ = fsr;
-        RFoot_front_left_ = fsr_sensors[i];
-        fsr_rfl_update_connection_ = fsr->ConnectUpdated(boost::bind(&GazeboNaoqiControlPlugin::onFSRUpdate, this, gazebo_rfoot_front_left_, RFoot_front_left_));
-      }
-      else if(name == "RFoot/FSR/FrontRight")
-      {
-        gazebo_rfoot_front_right_ = fsr;
-        RFoot_front_right_ = fsr_sensors[i];
-        fsr_rfr_update_connection_ = fsr->ConnectUpdated(boost::bind(&GazeboNaoqiControlPlugin::onFSRUpdate, this, gazebo_rfoot_front_right_, RFoot_front_right_));
-      }
-      else if(name == "LFoot/FSR/RearLeft")
-      {
-        gazebo_lfoot_rear_left_ = fsr;
-        LFoot_rear_left_ = fsr_sensors[i];
-        fsr_lrl_update_connection_ = fsr->ConnectUpdated(boost::bind(&GazeboNaoqiControlPlugin::onFSRUpdate, this, gazebo_lfoot_rear_left_, LFoot_rear_left_));
-      }
-      else if(name == "LFoot/FSR/RearRight")
-      {
-        gazebo_lfoot_rear_right_ = fsr;
-        LFoot_rear_right_ = fsr_sensors[i];
-        fsr_lrr_update_connection_ = fsr->ConnectUpdated(boost::bind(&GazeboNaoqiControlPlugin::onFSRUpdate, this, gazebo_lfoot_rear_right_, LFoot_rear_right_));
-      }
-      else if(name == "LFoot/FSR/FrontLeft")
-      {
-        gazebo_lfoot_front_left_ = fsr;
-        LFoot_front_left_ = fsr_sensors[i];
-        fsr_lfl_update_connection_ = fsr->ConnectUpdated(boost::bind(&GazeboNaoqiControlPlugin::onFSRUpdate, this, gazebo_lfoot_front_left_, LFoot_front_left_));
-      }
-      else if(name == "LFoot/FSR/FrontRight")
-      {
-        gazebo_lfoot_front_right_ = fsr;
-        LFoot_front_right_ = fsr_sensors[i];
-        fsr_lfr_update_connection_ = fsr->ConnectUpdated(boost::bind(&GazeboNaoqiControlPlugin::onFSRUpdate, this, gazebo_lfoot_front_right_, LFoot_front_right_));
-      }
-      fsr->SetActive(true);
     }
-  }
 
-  // Activate Sonars
-  std::vector<const Sim::SonarSensor*> sonar_sensors = naoqi_model_->sonarSensors();
-  for(int i=0;i<sonar_sensors.size();i++)
-  {
-    sensors::RaySensorPtr sonar = (boost::dynamic_pointer_cast<sensors::RaySensor>(sensors::SensorManager::Instance()->GetSensor(sonar_sensors[i]->name())));
-    if(sonar)
+    // Activate Sonars
+    std::vector<const Sim::SonarSensor*> sonar_sensors = naoqi_model_->sonarSensors();
+    for(int i=0;i<sonar_sensors.size();i++)
     {
-      if(sonar_sensors[i]->name() == "Sonar/Left")
+      sensors::RaySensorPtr sonar = (boost::dynamic_pointer_cast<sensors::RaySensor>(sensors::SensorManager::Instance()->GetSensor(scoped_name + sonar_sensors[i]->name())));
+      if(sonar)
       {
-        left_sonar_ = sonar_sensors[i];
-        gazebo_left_sonar_ = sonar;
-        left_sonar_update_connection_ = sonar->GetLaserShape()->ConnectNewLaserScans(boost::bind(&GazeboNaoqiControlPlugin::onSonarUpdate, this, gazebo_left_sonar_, left_sonar_));
+        ROS_INFO(sonar->GetScopedName().c_str());
+        if(sonar_sensors[i]->name() == "Sonar/Left")
+        {
+          left_sonar_ = sonar_sensors[i];
+          gazebo_left_sonar_ = sonar;
+          left_sonar_update_connection_ = sonar->GetLaserShape()->ConnectNewLaserScans(boost::bind(&GazeboNaoqiControlPlugin::onSonarUpdate, this, gazebo_left_sonar_, left_sonar_));
+        }
+        else if(sonar_sensors[i]->name() == "Sonar/Right")
+        {
+          right_sonar_ = sonar_sensors[i];
+          gazebo_right_sonar_ = sonar;
+          right_sonar_update_connection_ = sonar->GetLaserShape()->ConnectNewLaserScans(boost::bind(&GazeboNaoqiControlPlugin::onSonarUpdate, this, gazebo_right_sonar_, right_sonar_));
+        }
+        sonar->SetActive(true);
       }
-      else if(sonar_sensors[i]->name() == "Sonar/Right")
-      {
-        right_sonar_ = sonar_sensors[i];
-        gazebo_right_sonar_ = sonar;
-        right_sonar_update_connection_ = sonar->GetLaserShape()->ConnectNewLaserScans(boost::bind(&GazeboNaoqiControlPlugin::onSonarUpdate, this, gazebo_right_sonar_, right_sonar_));
-      }
-      sonar->SetActive(true);
+    }
+    if (!_child->GetChildCount())
+    {
+      initSensors(_child);
     }
   }
 }
